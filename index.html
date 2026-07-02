@@ -57,6 +57,9 @@
   .success { color: #1D9E75 !important; }
   .warning { color: #BA7517 !important; }
   #lobbyStatus { min-height: 20px; font-size: 14px; }
+  .server-select { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; margin: 4px 0; }
+  .server-select label { font-size: 13px; color: #aaa; }
+  .server-select select { background: #2a2a2a; color: #eee; border: 1px solid #555; border-radius: 6px; padding: 6px 10px; }
   @media (max-width: 500px) {
     #settings label { font-size: 12px; }
     input, button { font-size: 12px; padding: 6px 10px; }
@@ -70,6 +73,17 @@
 
 <div id="lobby">
   <p style="font-size: 14px; color: #aaa;">Настройки задаёт игрок 1 (хост) перед созданием комнаты.</p>
+
+  <div class="server-select">
+    <label>Сервер PeerJS:
+      <select id="serverSelect">
+        <option value="peerjs.com">peerjs.com</option>
+        <option value="0.peerjs.com">0.peerjs.com</option>
+        <option value="1.peerjs.com">1.peerjs.com</option>
+        <option value="peerjs-server.herokuapp.com">herokuapp</option>
+      </select>
+    </label>
+  </div>
 
   <div id="settings">
     <h3>⚙️ Настройки игры (для хоста)</h3>
@@ -130,6 +144,25 @@ const lobbyStatusEl = document.getElementById('lobbyStatus');
 let peer = null, conn = null, isHost = false;
 let state = null, myDir = null, loopId = null, currentDelay = 130;
 let isGameActive = false;
+let currentServer = 'peerjs.com';
+
+function getPeerConfig() {
+  const server = document.getElementById('serverSelect').value;
+  currentServer = server;
+  return {
+    config: {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    },
+    host: server,
+    port: 443,
+    path: '/peerjs',
+    secure: true,
+    debug: 2
+  };
+}
 
 function readSettings() {
   cols = rows = parseInt(document.getElementById('setGridSize').value) || 24;
@@ -141,6 +174,7 @@ function readSettings() {
   SETTINGS.foodScore = parseInt(document.getElementById('setFoodScore').value) || 1;
   SETTINGS.bonusScore = parseInt(document.getElementById('setBonusScore').value) || 3;
   SETTINGS.wrap = document.getElementById('setWrap').checked;
+  SETTINGS.gridSize = cols;
 }
 
 function freshState() {
@@ -200,17 +234,6 @@ function drawSnake(snake, bodyColor, headColor) {
   if (snake.length) {
     ctx.fillStyle = headColor;
     drawRoundedCell(snake[0].x, snake[0].y, 7);
-    // Глазки
-    ctx.fillStyle = '#fff';
-    const head = snake[0];
-    const dx = state.dir1.x || 0, dy = state.dir1.y || 0;
-    const offsets = [
-      {x: 0.3, y: -0.3},
-      {x: -0.3, y: -0.3},
-      {x: 0.3, y: 0.3},
-      {x: -0.3, y: 0.3}
-    ];
-    // Упрощённые глазки
   }
 }
 
@@ -219,7 +242,6 @@ function draw() {
   
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   
-  // Сетка
   ctx.strokeStyle = 'rgba(255,255,255,0.05)';
   ctx.lineWidth = 1;
   for (let i = 0; i <= cols; i++) {
@@ -235,7 +257,6 @@ function draw() {
     ctx.stroke();
   }
 
-  // Еда
   ctx.save();
   ctx.shadowColor = '#F0A030';
   ctx.shadowBlur = 10;
@@ -243,7 +264,6 @@ function draw() {
   drawRoundedCell(state.food.x, state.food.y, 6);
   ctx.restore();
 
-  // Бонус
   if (state.bonus) {
     ctx.save();
     ctx.globalAlpha = 0.5 + 0.5 * Math.abs(Math.sin(Date.now() / 150));
@@ -254,16 +274,13 @@ function draw() {
     ctx.restore();
   }
 
-  // Змейки
   drawSnake(state.snake1, '#1D9E75', '#9FE1CB');
   drawSnake(state.snake2, '#378ADD', '#85B7EB');
 
-  // Обновляем счёт
   document.getElementById('score1').textContent = state.score1;
   document.getElementById('score2').textContent = state.score2;
   document.getElementById('status').textContent = state.msg || '';
   
-  // Показываем кнопки
   const startBtn = document.getElementById('startBtn');
   const restartBtn = document.getElementById('restartBtn');
   
@@ -291,7 +308,6 @@ function advance() {
   
   const S = state.settings;
 
-  // Бонус
   if (state.bonus) {
     state.bonus.ttl--;
     if (state.bonus.ttl <= 0) state.bonus = null;
@@ -315,7 +331,6 @@ function advance() {
     if (head2.x < 0 || head2.x >= cols || head2.y < 0 || head2.y >= rows) dead2 = true;
   }
 
-  // Столкновения
   const body1 = state.snake1.slice(0, -1);
   const body2 = state.snake2.slice(0, -1);
   
@@ -348,7 +363,6 @@ function advance() {
   let grow1 = false, grow2 = false;
   let ateFood = false;
 
-  // Проверка еды
   if (head1.x === state.food.x && head1.y === state.food.y) {
     state.score1 += S.foodScore;
     grow1 = true;
@@ -402,7 +416,6 @@ function hostLoop() {
     return;
   }
   
-  // Обработка обратного отсчёта
   if (state.countdownMs > 0) {
     state.countdownMs -= currentDelay;
     if (state.countdownMs <= 0) {
@@ -447,7 +460,6 @@ function setupConnection(c) {
       state = freshState();
       draw();
       startLoop(SETTINGS.speed);
-      // Отправляем состояние новому игроку
       setTimeout(() => sendState(), 100);
     }
   });
@@ -505,43 +517,49 @@ function makeShortCode() {
   return code;
 }
 
-// Создание комнаты (хост)
 document.getElementById('hostBtn').addEventListener('click', () => {
   readSettings();
   isHost = true;
   myDir = { x: 1, y: 0 };
   
   const shortCode = makeShortCode();
-  peer = new Peer(shortCode, {
-    debug: 2
-  });
   
-  peer.on('open', (id) => {
-    document.getElementById('roomCodeBox').style.display = 'flex';
-    document.getElementById('roomCodeText').textContent = id;
-    document.getElementById('copyBtn').textContent = '📋 Копировать';
-    connStatusEl.textContent = '🟡 Комната создана. Ждём второго игрока...';
-    connStatusEl.className = 'warning';
-    lobbyStatusEl.textContent = 'Отправьте код второму игроку';
-  });
-  
-  peer.on('connection', (c) => {
-    lobbyStatusEl.textContent = '✅ Второй игрок подключился!';
-    setupConnection(c);
-  });
-  
-  peer.on('error', (err) => {
-    console.error('Peer error:', err);
-    if (err.type === 'unavailable-id') {
-      connStatusEl.textContent = '❌ Код занят, попробуйте ещё раз';
-    } else {
-      connStatusEl.textContent = '❌ Ошибка: ' + err.type;
-    }
+  try {
+    const config = getPeerConfig();
+    peer = new Peer(shortCode, config);
+    
+    peer.on('open', (id) => {
+      document.getElementById('roomCodeBox').style.display = 'flex';
+      document.getElementById('roomCodeText').textContent = id;
+      document.getElementById('copyBtn').textContent = '📋 Копировать';
+      connStatusEl.textContent = '🟡 Комната создана. Ждём второго игрока...';
+      connStatusEl.className = 'warning';
+      lobbyStatusEl.textContent = 'Отправьте код второму игроку';
+    });
+    
+    peer.on('connection', (c) => {
+      lobbyStatusEl.textContent = '✅ Второй игрок подключился!';
+      setupConnection(c);
+    });
+    
+    peer.on('error', (err) => {
+      console.error('Peer error:', err);
+      if (err.type === 'unavailable-id') {
+        connStatusEl.textContent = '❌ Код занят, попробуйте ещё раз';
+      } else if (err.type === 'server-error') {
+        connStatusEl.textContent = '❌ Сервер недоступен. Попробуйте другой сервер';
+      } else {
+        connStatusEl.textContent = '❌ Ошибка: ' + err.type;
+      }
+      connStatusEl.className = 'error';
+    });
+  } catch (e) {
+    console.error('Create peer error:', e);
+    connStatusEl.textContent = '❌ Ошибка создания комнаты: ' + e.message;
     connStatusEl.className = 'error';
-  });
+  }
 });
 
-// Копирование кода
 document.getElementById('copyBtn').addEventListener('click', () => {
   const code = document.getElementById('roomCodeText').textContent;
   if (navigator.clipboard) {
@@ -552,7 +570,6 @@ document.getElementById('copyBtn').addEventListener('click', () => {
       }, 1500);
     });
   } else {
-    // Fallback
     const el = document.createElement('textarea');
     el.value = code;
     document.body.appendChild(el);
@@ -566,7 +583,6 @@ document.getElementById('copyBtn').addEventListener('click', () => {
   }
 });
 
-// Подключение к комнате (клиент)
 document.getElementById('joinBtn').addEventListener('click', () => {
   const roomId = document.getElementById('joinInput').value.trim().toUpperCase();
   if (!roomId) {
@@ -584,33 +600,39 @@ document.getElementById('joinBtn').addEventListener('click', () => {
   
   readSettings();
   
-  peer = new Peer({
-    debug: 2
-  });
-  
-  peer.on('open', () => {
-    const c = peer.connect(roomId);
-    if (c) {
-      setupConnection(c);
-      lobbyStatusEl.textContent = '✅ Подключение установлено';
-    } else {
-      connStatusEl.textContent = '❌ Не удалось подключиться';
+  try {
+    const config = getPeerConfig();
+    peer = new Peer(config);
+    
+    peer.on('open', () => {
+      const c = peer.connect(roomId);
+      if (c) {
+        setupConnection(c);
+        lobbyStatusEl.textContent = '✅ Подключение установлено';
+      } else {
+        connStatusEl.textContent = '❌ Не удалось подключиться';
+        connStatusEl.className = 'error';
+      }
+    });
+    
+    peer.on('error', (err) => {
+      console.error('Join error:', err);
+      if (err.type === 'peer-unavailable') {
+        connStatusEl.textContent = '❌ Комната не найдена. Проверьте код.';
+      } else if (err.type === 'server-error') {
+        connStatusEl.textContent = '❌ Сервер недоступен. Попробуйте другой сервер';
+      } else {
+        connStatusEl.textContent = '❌ Ошибка: ' + err.type;
+      }
       connStatusEl.className = 'error';
-    }
-  });
-  
-  peer.on('error', (err) => {
-    console.error('Join error:', err);
-    if (err.type === 'peer-unavailable') {
-      connStatusEl.textContent = '❌ Комната не найдена. Проверьте код.';
-    } else {
-      connStatusEl.textContent = '❌ Ошибка: ' + err.type;
-    }
+    });
+  } catch (e) {
+    console.error('Join peer error:', e);
+    connStatusEl.textContent = '❌ Ошибка подключения: ' + e.message;
     connStatusEl.className = 'error';
-  });
+  }
 });
 
-// Начать игру (только хост)
 document.getElementById('startBtn').addEventListener('click', () => {
   if (isHost && state && !state.running && !state.over && state.countdownMs === 0) {
     state.countdownMs = 3000;
@@ -620,7 +642,6 @@ document.getElementById('startBtn').addEventListener('click', () => {
   }
 });
 
-// Перезапуск (только хост)
 document.getElementById('restartBtn').addEventListener('click', () => {
   if (isHost) {
     state = freshState();
@@ -634,7 +655,6 @@ document.getElementById('restartBtn').addEventListener('click', () => {
   }
 });
 
-// Управление
 function applyDir(nd) {
   if (!myDir || !state) return;
   if (nd.x === -myDir.x && nd.y === -myDir.y) return;
@@ -649,7 +669,6 @@ function applyDir(nd) {
   }
 }
 
-// Клавиатура
 window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
@@ -665,7 +684,6 @@ window.addEventListener('keydown', (e) => {
   if (nd) applyDir(nd);
 }, { passive: false });
 
-// Тач управление
 let tsx = 0, tsy = 0;
 canvas.addEventListener('touchstart', (e) => {
   const t = e.touches[0];
@@ -685,7 +703,6 @@ canvas.addEventListener('touchend', (e) => {
   applyDir(nd);
 }, { passive: true });
 
-// Очистка при закрытии
 window.addEventListener('beforeunload', () => {
   if (loopId) {
     clearInterval(loopId);
@@ -696,7 +713,6 @@ window.addEventListener('beforeunload', () => {
   }
 });
 
-// Инициализация
 readSettings();
 document.getElementById('gameContainer').style.display = 'none';
 </script>
