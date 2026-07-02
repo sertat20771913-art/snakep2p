@@ -72,7 +72,7 @@
     <button id="copyBtn">Копировать</button>
   </div>
   <p>— или —</p>
-  <input id="joinInput" type="text" placeholder="Введите код комнаты">
+  <input id="joinInput" type="text" placeholder="Введите код комнаты" style="width:180px;text-transform:uppercase;">
   <button id="joinBtn">Подключиться (я игрок 2)</button>
   <p id="lobbyStatus"></p>
 </div>
@@ -311,11 +311,19 @@ function setupConnection(c) {
   });
 }
 
+function makeShortCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i=0;i<5;i++) code += chars[Math.floor(Math.random()*chars.length)];
+  return code;
+}
+
 document.getElementById('hostBtn').addEventListener('click', () => {
   readSettings();
   isHost = true;
   myDir = {x:1,y:0};
-  peer = new Peer();
+  const shortCode = makeShortCode();
+  peer = new Peer(shortCode);
   peer.on('open', (id) => {
     document.getElementById('roomCodeBox').style.display = 'flex';
     document.getElementById('roomCodeText').textContent = id;
@@ -338,7 +346,7 @@ document.getElementById('copyBtn').addEventListener('click', () => {
 });
 
 document.getElementById('joinBtn').addEventListener('click', () => {
-  const roomId = document.getElementById('joinInput').value.trim();
+  const roomId = document.getElementById('joinInput').value.trim().toUpperCase();
   if (!roomId) return;
   isHost = false;
   myDir = {x:-1,y:0};
