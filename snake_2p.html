@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Змейка на двоих онлайн</title>
+<style>
+  body {
+    background: #1e1e1e;
+    color: #eee;
+    font-family: sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+    touch-action: manipulation;
+  }
+  canvas {
+    background: #111;
+    border: 2px solid #555;
+    border-radius: 8px;
+    margin-top: 12px;
+    max-width: 100%;
+    touch-action: none;
+  }
+  input[type=text], input[type=number], button {
+    padding: 8px 12px;
+    font-size: 14px;
+    border-radius: 6px;
+    border: 1px solid #555;
+    background: #2a2a2a;
+    color: #eee;
+    margin: 4px;
+  }
+  button { cursor: pointer; }
+  button:hover { background: #3a3a3a; }
+  #status { margin-top: 8px; font-size: 15px; color: #aaa; text-align: center; min-height: 20px; }
+  #connStatus { font-size: 13px; color: #888; text-align: center; }
+  #scores { display: flex; gap: 24px; font-size: 15px; margin-top: 10px; }
+  .p1 { color: #1D9E75; }
+  .p2 { color: #4FA6E8; }
+  #lobby { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 380px; text-align: center; }
+  #roomCodeBox { display: none; align-items: center; gap: 6px; }
+  #roomCodeBox span { font-weight: bold; font-size: 16px; letter-spacing: 1px; }
+  #settings { display:flex; flex-direction:column; gap:8px; text-align:left; background:#252525; padding:14px; border-radius:8px; width:100%; box-sizing:border-box; }
+  #settings label { display:flex; justify-content:space-between; align-items:center; font-size:13px; gap:8px; }
+  #settings input[type=number] { width:70px; margin:0; }
+  #settings h3 { margin:0 0 4px 0; font-size:14px; color:#ccc; }
+</style>
+</head>
+<body>
+
+<h2>Змейка на двоих (онлайн, P2P)</h2>
+
+<div id="lobby">
+  <p>Настройки задаёт игрок 1 (хост) перед созданием комнаты. Второй игрок просто подключается по коду.</p>
+
+  <div id="settings">
+    <h3>Настройки игры (только для хоста)</h3>
+    <label>Начальная скорость (мс/шаг) <input id="setSpeed" type="number" value="130" min="40" max="400"></label>
+    <label>Без ускорения со временем <input id="setNoSpeedup" type="checkbox"></label>
+    <label>Шанс бонусной еды, % за тик <input id="setBonusChance" type="number" value="1.5" min="0" max="20" step="0.5"></label>
+    <label>Очков за обычную еду <input id="setFoodScore" type="number" value="1" min="1" max="10"></label>
+    <label>Очков за бонусную еду <input id="setBonusScore" type="number" value="3" min="1" max="20"></label>
+    <label>Размер поля (клеток по стороне) <input id="setGridSize" type="number" value="24" min="10" max="40"></label>
+    <label>Проходить сквозь стены <input id="setWrap" type="checkbox"></label>
+  </div>
+
+  <button id="hostBtn">Создать комнату (я игрок 1)</button>
+  <div id="roomCodeBox">
+    <span id="roomCodeText"></span>
+    <button id="copyBtn">Копировать</button>
+  </div>
+  <p>— или —</p>
+  <input id="joinInput" type="text" placeholder="Введите код комнаты">
+  <button id="joinBtn">Подключиться (я игрок 2)</button>
+  <p id="lobbyStatus"></p>
+</div>
+
+<div id="connStatus"></div>
+
+<div id="scores" style="display:none;">
+  <div class="p1">Игрок 1: <span id="score1">0</span></div>
+  <div class="p2">Игрок 2: <span id="score2">0</span></div>
+</div>
+
+<canvas id="game" width="480" height="480" style="display:none;"></canvas>
+<div id="status"></div>
+<button id="startBtn" style="display:none;">Начать</button>
+<button id="restartBtn" style="display:none;">Играть снова</button>
+
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+const cell = 20;
+let cols = 24, rows = 24;
+let SETTINGS = { speed:130, noSpeedup:false, bonusChance:0.015, foodScore:1, bonusScore:3, wrap:false };
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const connStatusEl = document.getElementById('connStatus');
+
+let peer, conn, isHost = false;
+let state, myDir, loopId = null, currentDelay = 130;
+
+function readSettings() {
+  cols = rows = parseInt(document.getElementById('setGridSize').value) || 24;
+  canvas.width = cols*cell;
+  canvas.height = rows*cell;
+  SETTINGS.speed = parseInt(document.getElementById('setSpeed').value) || 130;
+  SETTINGS.noSpeedup = document.getElementById('setNoSpeedup').checked;
+  SETTINGS.bonusChance = (parseFloat(document.getElementById('setBonusChance').value) || 1.5) / 100;
+  SETTINGS.foodScore = parseInt(document.getElementById('setFoodScore').value) || 1;
+  SETTINGS.bonusScore = parseInt(document.getElementById('setBonusScore').value) || 3;
+  SETTINGS.wrap = document.getElementById('setWrap').checked;
+}
+
+function freshState() {
+  const midY = Math.floor(rows/2);
+  return {
+    snake1: [{x:5,y:midY},{x:4,y:midY},{x:3,y:midY}],
+    snake2: [{x:cols-6,y:midY},{x:cols-5,y:midY},{x:cols-4,y:midY}],
+    dir1: {x:1,y:0},
+    dir2: {x:-1,y:0},
+    food: {x:Math.floor(cols/2),y:Math.floor(rows/2)},
+    bonus: null,
+    running: false,
+    over: false,
+    countdownMs: 0,
+    msg: '',
+    score1: 0,
+    score2: 0,
+    settings: SETTINGS
+  };
+}
+
+function randCell(occupied) {
+  let p;
+  do {
+    p = { x: Math.floor(Math.random()*cols), y: Math.floor(Math.random()*rows) };
+  } while (occupied.some(s => s.x===p.x && s.y===p.y));
+  return p;
+}
+
+function drawRoundedCell(x, y, r) {
+  const px = x*cell+2, py = y*cell+2, s = cell-4;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(px, py, s, s, r); else ctx.rect(px, py, s, s);
+  ctx.fill();
+}
+
+function drawSnake(snake, bodyColor, headColor) {
+  ctx.fillStyle = bodyColor;
+  for (let i=1;i<snake.length;i++) drawRoundedCell(snake[i].x, snake[i].y, 5);
+  if (snake.length) {
+    ctx.fillStyle = headColor;
+    drawRoundedCell(snake[0].x, snake[0].y, 7);
+  }
+}
+
+function draw() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  for (let i=0;i<=cols;i++){ ctx.beginPath(); ctx.moveTo(i*cell,0); ctx.lineTo(i*cell,canvas.height); ctx.stroke(); }
+  for (let j=0;j<=rows;j++){ ctx.beginPath(); ctx.moveTo(0,j*cell); ctx.lineTo(canvas.width,j*cell); ctx.stroke(); }
+
+  ctx.save();
+  ctx.shadowColor = '#BA7517';
+  ctx.shadowBlur = 8;
+  ctx.fillStyle = '#F0A030';
+  drawRoundedCell(state.food.x, state.food.y, 6);
+  ctx.restore();
+
+  if (state.bonus) {
+    ctx.save();
+    ctx.globalAlpha = 0.6 + 0.4*Math.abs(Math.sin(Date.now()/150));
+    ctx.shadowColor = '#D4537E';
+    ctx.shadowBlur = 10;
+    ctx.fillStyle = '#ED93B1';
+    drawRoundedCell(state.bonus.x, state.bonus.y, 6);
+    ctx.restore();
+  }
+
+  drawSnake(state.snake1, '#1D9E75', '#9FE1CB');
+  drawSnake(state.snake2, '#378ADD', '#85B7EB');
+
+  document.getElementById('score1').textContent = state.score1;
+  document.getElementById('score2').textContent = state.score2;
+  document.getElementById('status').textContent = state.msg;
+  document.getElementById('startBtn').style.display = (isHost && !state.running && !state.over && state.countdownMs===0) ? '' : 'none';
+  document.getElementById('restartBtn').style.display = (isHost && state.over) ? '' : 'none';
+}
+
+function computeDelay() {
+  if (state.settings.noSpeedup) return state.settings.speed;
+  const total = state.score1 + state.score2;
+  return Math.max(50, state.settings.speed - total*4);
+}
+
+function advance() {
+  const S = state.settings;
+
+  if (state.bonus) {
+    state.bonus.ttl--;
+    if (state.bonus.ttl <= 0) state.bonus = null;
+  } else if (Math.random() < S.bonusChance) {
+    const p = randCell([...state.snake1, ...state.snake2, state.food]);
+    state.bonus = { x: p.x, y: p.y, ttl: 55 };
+  }
+
+  let head1 = {x: state.snake1[0].x + state.dir1.x, y: state.snake1[0].y + state.dir1.y};
+  let head2 = {x: state.snake2[0].x + state.dir2.x, y: state.snake2[0].y + state.dir2.y};
+  let dead1=false, dead2=false;
+
+  if (S.wrap) {
+    head1.x = (head1.x + cols) % cols; head1.y = (head1.y + rows) % rows;
+    head2.x = (head2.x + cols) % cols; head2.y = (head2.y + rows) % rows;
+  } else {
+    if (head1.x<0||head1.x>=cols||head1.y<0||head1.y>=rows) dead1=true;
+    if (head2.x<0||head2.x>=cols||head2.y<0||head2.y>=rows) dead2=true;
+  }
+
+  if (state.snake1.some(s=>s.x===head1.x&&s.y===head1.y)) dead1=true;
+  if (state.snake2.some(s=>s.x===head2.x&&s.y===head2.y)) dead2=true;
+  if (state.snake2.some(s=>s.x===head1.x&&s.y===head1.y)) dead1=true;
+  if (state.snake1.some(s=>s.x===head2.x&&s.y===head2.y)) dead2=true;
+  if (head1.x===head2.x && head1.y===head2.y) { dead1=true; dead2=true; }
+
+  if (dead1||dead2) {
+    state.running=false; state.over=true;
+    if (dead1&&dead2) state.msg = 'Ничья! Обе змейки столкнулись.';
+    else if (dead1) state.msg = 'Игрок 2 победил! Счёт ' + state.score2 + ':' + state.score1;
+    else state.msg = 'Игрок 1 победил! Счёт ' + state.score1 + ':' + state.score2;
+    return;
+  }
+
+  state.snake1.unshift(head1);
+  state.snake2.unshift(head2);
+
+  let grow1=false, grow2=false, ateFood=false;
+  if (head1.x===state.food.x && head1.y===state.food.y) { state.score1 += S.foodScore; grow1=true; ateFood=true; }
+  if (head2.x===state.food.x && head2.y===state.food.y) { state.score2 += S.foodScore; grow2=true; ateFood=true; }
+  if (state.bonus && head1.x===state.bonus.x && head1.y===state.bonus.y) { state.score1 += S.bonusScore; grow1=true; state.bonus=null; }
+  if (state.bonus && head2.x===state.bonus.x && head2.y===state.bonus.y) { state.score2 += S.bonusScore; grow2=true; state.bonus=null; }
+
+  if (!grow1) state.snake1.pop();
+  if (!grow2) state.snake2.pop();
+  if (ateFood) state.food = randCell([...state.snake1, ...state.snake2]);
+}
+
+function sendState() {
+  if (conn && conn.open) conn.send({type:'state', state});
+}
+
+function startLoop(delay) {
+  currentDelay = delay;
+  if (loopId) clearInterval(loopId);
+  loopId = setInterval(hostLoop, delay);
+}
+
+function hostLoop() {
+  if (!isHost || !state) return;
+  if (state.countdownMs > 0) {
+    state.countdownMs -= currentDelay;
+    if (state.countdownMs <= 0) { state.countdownMs = 0; state.running = true; state.msg = 'Игра идёт!'; }
+    else state.msg = 'Старт через ' + Math.ceil(state.countdownMs/1000);
+  } else if (state.running) {
+    advance();
+    if (!state.over) {
+      const nd = computeDelay();
+      if (Math.abs(nd - currentDelay) >= 4) startLoop(nd);
+    }
+  }
+  draw();
+  sendState();
+}
+
+function setupConnection(c) {
+  conn = c;
+  conn.on('open', () => {
+    document.getElementById('lobby').style.display = 'none';
+    document.getElementById('scores').style.display = 'flex';
+    canvas.style.display = '';
+    connStatusEl.textContent = 'Подключено!';
+    connStatusEl.style.color = '#1D9E75';
+    if (isHost) {
+      state = freshState();
+      draw();
+      startLoop(SETTINGS.speed);
+    }
+  });
+  conn.on('data', (data) => {
+    if (data.type === 'state') {
+      state = data.state;
+      if (!cols || cols !== canvas.width/cell) {
+        cols = canvas.width/cell; rows = canvas.height/cell;
+      }
+      draw();
+    } else if (data.type === 'dir2') {
+      if (isHost && state) state.dir2 = data.dir;
+    } else if (data.type === 'restart') {
+      if (!isHost) myDir = {x:-1,y:0};
+    }
+  });
+  conn.on('close', () => {
+    connStatusEl.textContent = 'Игрок отключился. Обновите страницу, чтобы начать заново.';
+    connStatusEl.style.color = '#E24B4A';
+  });
+  conn.on('error', () => {
+    connStatusEl.textContent = 'Ошибка соединения.';
+    connStatusEl.style.color = '#E24B4A';
+  });
+}
+
+document.getElementById('hostBtn').addEventListener('click', () => {
+  readSettings();
+  isHost = true;
+  myDir = {x:1,y:0};
+  peer = new Peer();
+  peer.on('open', (id) => {
+    document.getElementById('roomCodeBox').style.display = 'flex';
+    document.getElementById('roomCodeText').textContent = id;
+    connStatusEl.textContent = 'Комната создана. Ждём второго игрока...';
+    connStatusEl.style.color = '#BA7517';
+  });
+  peer.on('connection', (c) => setupConnection(c));
+  peer.on('error', (err) => {
+    connStatusEl.textContent = 'Ошибка: ' + err.type;
+    connStatusEl.style.color = '#E24B4A';
+  });
+});
+
+document.getElementById('copyBtn').addEventListener('click', () => {
+  const code = document.getElementById('roomCodeText').textContent;
+  navigator.clipboard?.writeText(code).then(() => {
+    document.getElementById('copyBtn').textContent = 'Скопировано!';
+    setTimeout(() => document.getElementById('copyBtn').textContent = 'Копировать', 1500);
+  });
+});
+
+document.getElementById('joinBtn').addEventListener('click', () => {
+  const roomId = document.getElementById('joinInput').value.trim();
+  if (!roomId) return;
+  isHost = false;
+  myDir = {x:-1,y:0};
+  connStatusEl.textContent = 'Подключаемся...';
+  connStatusEl.style.color = '#BA7517';
+  peer = new Peer();
+  peer.on('open', () => {
+    const c = peer.connect(roomId);
+    setupConnection(c);
+  });
+  peer.on('error', (err) => {
+    connStatusEl.textContent = 'Не удалось подключиться: ' + err.type;
+    connStatusEl.style.color = '#E24B4A';
+  });
+});
+
+document.getElementById('startBtn').addEventListener('click', () => {
+  if (isHost && state && !state.running && !state.over) {
+    state.countdownMs = 3000;
+    state.msg = 'Приготовьтесь...';
+  }
+});
+
+document.getElementById('restartBtn').addEventListener('click', () => {
+  if (isHost) {
+    state = freshState();
+    myDir = {x:1,y:0};
+    startLoop(SETTINGS.speed);
+    if (conn && conn.open) conn.send({type:'restart'});
+  }
+});
+
+function applyDir(nd) {
+  if (!myDir) return;
+  if (nd.x === -myDir.x && nd.y === -myDir.y) return;
+  myDir = nd;
+  if (isHost) { if (state) state.dir1 = myDir; }
+  else if (conn && conn.open) conn.send({type:'dir2', dir: myDir});
+}
+
+window.addEventListener('keydown', (e) => {
+  const k = e.key.toLowerCase();
+  if (['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright'].includes(k)) e.preventDefault();
+  let nd = null;
+  if (k==='w'||k==='arrowup') nd = {x:0,y:-1};
+  else if (k==='s'||k==='arrowdown') nd = {x:0,y:1};
+  else if (k==='a'||k==='arrowleft') nd = {x:-1,y:0};
+  else if (k==='d'||k==='arrowright') nd = {x:1,y:0};
+  if (nd) applyDir(nd);
+}, {passive:false});
+
+let tsx=0, tsy=0;
+canvas.addEventListener('touchstart', (e) => {
+  const t = e.touches[0]; tsx = t.clientX; tsy = t.clientY;
+}, {passive:true});
+canvas.addEventListener('touchend', (e) => {
+  const t = e.changedTouches[0];
+  const dx = t.clientX - tsx, dy = t.clientY - tsy;
+  if (Math.abs(dx) < 20 && Math.abs(dy) < 20) return;
+  const nd = Math.abs(dx) > Math.abs(dy) ? {x: dx>0?1:-1, y:0} : {x:0, y: dy>0?1:-1};
+  applyDir(nd);
+}, {passive:true});
+</script>
+</body>
+</html>
